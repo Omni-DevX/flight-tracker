@@ -1,0 +1,54 @@
+name: ✈️ Check Flight Prices
+
+on:
+  # Runs every 3 hours
+  schedule:
+    - cron: '0 */3 * * *'
+
+  # Lets you trigger manually from GitHub UI
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      # Download saved state from previous runs (price history, batch index)
+      - name: Restore state
+        uses: actions/cache/restore@v4
+        with:
+          path: data/state.json
+          key: flight-state-${{ github.run_id }}
+          restore-keys: |
+            flight-state-
+
+      - name: Run flight check
+        env:
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BATCH_SIZE: '2'
+        run: node dist/check-now.js
+
+      # Save state so the next run picks up where we left off
+      - name: Save state
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: data/state.json
+          key: flight-state-${{ github.run_id }}
