@@ -1,8 +1,11 @@
-import { eachDayOfInterval, addDays, format } from 'date-fns';
+import { eachDayOfInterval, addDays, format, isBefore, startOfDay } from 'date-fns';
 import { config } from './config';
 import { searchFlights, rateLimitDelay } from './flights';
-import { notifyPriceDrop, notifyNewLow } from './telegram';
-import { loadState, saveState, getWatchState, advanceBatch } from './state';
+import { notifyPriceDrop, notifyNewLow, notifyCoverageComplete } from './telegram';
+import {
+  loadState, saveState, getWatchState,
+  pickNextBatch, recordResult, getCoverageStats, getCheapestPairs, pairKey,
+} from './state';
 import { FlightWatch, DatePair, FlightResult } from './types';
 
 // ──────────────────────────────────────────────
@@ -10,12 +13,23 @@ import { FlightWatch, DatePair, FlightResult } from './types';
 // ──────────────────────────────────────────────
 
 /**
- * Generate all valid departure/return date combinations for a watch.
+ * Generate all VALID date pairs for a watch.
+ * Automatically filters out departure dates that have already passed.
  */
 export function generateDatePairs(watch: FlightWatch): DatePair[] {
+  const today = startOfDay(new Date());
+  const rangeStart = new Date(watch.departureDateRange.from + 'T00:00:00');
+  const rangeEnd = new Date(watch.departureDateRange.to + 'T00:00:00');
+
+  // Skip if the entire range is in the past
+  if (isBefore(rangeEnd, today)) return [];
+
+  // Start from today if range start is in the past
+  const effectiveStart = isBefore(rangeStart, today) ? today : rangeStart;
+
   const departureDays = eachDayOfInterval({
-    start: new Date(watch.departureDateRange.from + 'T00:00:00'),
-    end: new Date(watch.departureDateRange.to + 'T00:00:00'),
+    start: effectiveStart,
+    end: rangeEnd,
   });
 
   const pairs: DatePair[] = [];
@@ -33,25 +47,39 @@ export function generateDatePairs(watch: FlightWatch): DatePair[] {
 }
 
 /**
- * Check a single watch — queries one batch of date pairs.
+ * Check a single watch — dynamically picks the best date pairs to check.
  */
 export async function checkWatch(watch: FlightWatch): Promise<void> {
-  console.log(`\n[Monitor] Checking: ${watch.id} (${watch.origin}→${watch.destination})`);
+  console.log(`\n[Monitor] ── ${watch.id} (${watch.origin}→${watch.destination}) ──`);
 
   const allPairs = generateDatePairs(watch);
-  console.log(`[Monitor] Total date pairs: ${allPairs.length}`);
+
+  if (allPairs.length === 0) {
+    console.log(`[Monitor] ⚠️  All dates in the past — skipping.`);
+    return;
+  }
 
   const state = loadState();
+  const ws = getWatchState(state, watch.id);
   const batchSize = config.batchSize;
-  const startIndex = advanceBatch(state, watch.id, allPairs.length, batchSize);
-  const batch = allPairs.slice(startIndex, startIndex + batchSize);
 
-  console.log(`[Monitor] Checking batch: indices ${startIndex}–${startIndex + batch.length - 1}`);
-  console.log(`[Monitor] API calls this run: ${batch.length}`);
+  // Smart batch selection: unchecked first → cheap re-checks → stale refresh
+  const batch = pickNextBatch(ws, allPairs, batchSize, watch.targetPrice);
+
+  const stats = getCoverageStats(ws, allPairs.length);
+  console.log(`[Monitor] Coverage: ${stats.checked}/${stats.total} pairs checked (${stats.percentComplete}%)`);
+  console.log(`[Monitor] This run: checking ${batch.length} pair(s)`);
+
+  if (stats.cheapest) {
+    console.log(`[Monitor] Best so far: $${stats.cheapest.price} on ${stats.cheapest.out}→${stats.cheapest.back} (${stats.cheapest.airline})`);
+  }
 
   const results: FlightResult[] = [];
 
   for (const pair of batch) {
+    const isNew = !ws.datePairRecords[pairKey(pair)] || ws.datePairRecords[pairKey(pair)].checkCount === 0;
+    const tag = isNew ? '🆕' : '🔄';
+
     try {
       const flights = await searchFlights(
         watch.origin,
@@ -66,65 +94,63 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
         const cheapest = flights.reduce((min, f) => (f.price < min.price ? f : min));
         results.push(cheapest);
 
+        // Record in state
+        recordResult(ws, pair, cheapest.price, cheapest.airline, cheapest.priceLevel);
+
         const levelTag = cheapest.priceLevel ? ` [${cheapest.priceLevel}]` : '';
         console.log(
-          `  ${pair.out}→${pair.back}: $${cheapest.price} (${cheapest.airline}, ${cheapest.duration})${levelTag}`
+          `  ${tag} ${pair.out}→${pair.back}: $${cheapest.price} (${cheapest.airline}, ${cheapest.duration})${levelTag}`
         );
       } else {
-        console.log(`  ${pair.out}→${pair.back}: No results`);
+        recordResult(ws, pair, null, null, null);
+        console.log(`  ${tag} ${pair.out}→${pair.back}: No results`);
       }
 
       await rateLimitDelay();
     } catch (err) {
-      console.error(`  ${pair.out}→${pair.back}: Error —`, (err as Error).message);
+      console.error(`  ${tag} ${pair.out}→${pair.back}: Error —`, (err as Error).message);
     }
   }
 
-  // Find hits under target price
+  // Check for hits under target
   const hits = results
     .filter((r) => r.price <= watch.targetPrice)
     .sort((a, b) => a.price - b.price);
 
   // Track all-time low
-  const ws = getWatchState(state, watch.id);
   const overallCheapest = results.length > 0
     ? results.reduce((min, r) => (r.price < min.price ? r : min))
     : null;
 
   if (overallCheapest) {
-    // Record in price history (keep last 200 entries)
-    ws.priceHistory.push({
-      date: new Date().toISOString(),
-      lowestPrice: overallCheapest.price,
-      departureDate: overallCheapest.out,
-      returnDate: overallCheapest.back,
-      priceLevel: overallCheapest.priceLevel,
-    });
-
-    if (ws.priceHistory.length > 200) {
-      ws.priceHistory = ws.priceHistory.slice(-200);
-    }
-
-    // Check for new all-time low
     if (ws.lowestEverPrice === null || overallCheapest.price < ws.lowestEverPrice) {
       const previousLow = ws.lowestEverPrice;
       ws.lowestEverPrice = overallCheapest.price;
+      ws.lowestEverDates = { out: overallCheapest.out, back: overallCheapest.back };
 
       await notifyNewLow(watch, overallCheapest, previousLow);
     }
   }
 
-  // Notify if there are hits under target price
+  // Notify price drops
   if (hits.length > 0) {
     await notifyPriceDrop(watch, hits);
     console.log(`[Monitor] 🔔 ${hits.length} flight(s) under target! Alert sent.`);
   } else {
     const cheapestPrice = overallCheapest ? `$${overallCheapest.price}` : 'N/A';
-    console.log(
-      `[Monitor] No flights under $${watch.targetPrice} in this batch. Cheapest: ${cheapestPrice}`
-    );
+    console.log(`[Monitor] No flights under $${watch.targetPrice} in this batch. Cheapest: ${cheapestPrice}`);
   }
 
+  // Check if we just completed full coverage
+  const newStats = getCoverageStats(ws, allPairs.length);
+  if (newStats.percentComplete === 100 && !ws.coverageComplete) {
+    ws.coverageComplete = true;
+    const topCheap = getCheapestPairs(ws, 5);
+    await notifyCoverageComplete(watch, topCheap);
+    console.log(`[Monitor] ✅ Full month coverage complete! Sent summary.`);
+  }
+
+  ws.lastRunAt = new Date().toISOString();
   saveState(state);
 }
 

@@ -14,8 +14,8 @@ export interface TripDuration {
 
 export interface FlightWatch {
   id: string;
-  origin: string;       // IATA code, e.g. "YYZ"
-  destination: string;  // IATA code, e.g. "BCN"
+  origin: string;
+  destination: string;
   departureDateRange: DateRange;
   tripDuration: TripDuration;
   targetPrice: number;
@@ -37,25 +37,33 @@ export interface FlightResult {
   stops: number;
   currency: string;
   duration: string;
-  priceLevel: string | null;   // "low" | "typical" | "high" from Google
+  priceLevel: string | null;
   typicalPriceRange: [number, number] | null;
 }
 
-export interface BatchState {
-  [watchId: string]: {
-    lastBatchIndex: number;
-    lastChecked: string;
-    lowestEverPrice: number | null;
-    priceHistory: PriceEntry[];
-  };
+// ── State tracking per date pair ──
+
+export interface DatePairRecord {
+  out: string;
+  back: string;
+  lastChecked: string;       // ISO timestamp
+  lastPrice: number | null;
+  lowestPrice: number | null;
+  airline: string | null;
+  priceLevel: string | null;
+  checkCount: number;
 }
 
-export interface PriceEntry {
-  date: string;
-  lowestPrice: number;
-  departureDate: string;
-  returnDate: string;
-  priceLevel: string | null;
+export interface WatchState {
+  lastRunAt: string;
+  lowestEverPrice: number | null;
+  lowestEverDates: { out: string; back: string } | null;
+  datePairRecords: Record<string, DatePairRecord>;  // key = "out|back"
+  coverageComplete: boolean;  // true once all pairs checked at least once
+}
+
+export interface BatchState {
+  [watchId: string]: WatchState;
 }
 
 // ── SerpAPI response shapes ──

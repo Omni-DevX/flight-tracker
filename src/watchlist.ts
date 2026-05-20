@@ -18,8 +18,8 @@ import { FlightWatch } from './types';
 export const watchlist: FlightWatch[] = [
 
   // ═══════════════════════════════════════
-  //  JULY — Peak season, great weather,
-  //  festivals, Mt. Fuji climbing season
+  //  JULY — Peak season, cherry-free but
+  //  great weather, festivals, Mt. Fuji
   // ═══════════════════════════════════════
 
   {

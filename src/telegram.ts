@@ -1,5 +1,5 @@
 import { config } from './config';
-import { FlightWatch, FlightResult } from './types';
+import { FlightWatch, FlightResult, DatePairRecord } from './types';
 
 // ──────────────────────────────────────────────
 // Telegram Notification Service
@@ -7,9 +7,6 @@ import { FlightWatch, FlightResult } from './types';
 
 const BASE_URL = `https://api.telegram.org/bot${config.telegram.botToken}`;
 
-/**
- * Send a raw text message to the configured Telegram chat.
- */
 export async function sendMessage(text: string): Promise<void> {
   const response = await fetch(`${BASE_URL}/sendMessage`, {
     method: 'POST',
@@ -27,9 +24,6 @@ export async function sendMessage(text: string): Promise<void> {
   }
 }
 
-/**
- * Format a price level emoji.
- */
 function priceLevelEmoji(level: string | null): string {
   switch (level) {
     case 'low': return '🟢 Low';
@@ -39,9 +33,6 @@ function priceLevelEmoji(level: string | null): string {
   }
 }
 
-/**
- * Send a price-drop alert with the best flight options.
- */
 export async function notifyPriceDrop(
   watch: FlightWatch,
   hits: FlightResult[],
@@ -66,9 +57,6 @@ export async function notifyPriceDrop(
   console.log(`[Telegram] Sent alert for ${watch.origin}→${watch.destination} (${hits.length} hits)`);
 }
 
-/**
- * Send a new all-time-low price alert.
- */
 export async function notifyNewLow(
   watch: FlightWatch,
   result: FlightResult,
@@ -88,8 +76,32 @@ export async function notifyNewLow(
 }
 
 /**
- * Send a startup confirmation.
+ * Send a summary when full month coverage is complete.
+ * This is the "here's the cheapest period" notification.
  */
+export async function notifyCoverageComplete(
+  watch: FlightWatch,
+  cheapestPairs: DatePairRecord[],
+): Promise<void> {
+  if (cheapestPairs.length === 0) return;
+
+  const lines = cheapestPairs.map((r, i) => {
+    const level = r.priceLevel ? ` ${priceLevelEmoji(r.priceLevel)}` : '';
+    return `${i + 1}. 🗓 ${r.out} → ${r.back}\n   💰 *$${r.lastPrice}* ${watch.currency}${level}\n   ✈️ ${r.airline || 'N/A'}`;
+  });
+
+  const message =
+    `📊 *Full Month Scanned!*\n\n` +
+    `*${watch.origin} → ${watch.destination}*\n` +
+    `Every date combination has been checked.\n\n` +
+    `*🏆 Top 5 Cheapest Periods:*\n\n` +
+    lines.join('\n\n') +
+    `\n\n_The monitor will keep re-checking these dates for further drops._` +
+    `\n\n🔗 [Search on Google Flights](https://www.google.com/travel/flights?q=flights+from+${watch.origin}+to+${watch.destination})`;
+
+  await sendMessage(message);
+}
+
 export async function notifyStartup(watchCount: number): Promise<void> {
   await sendMessage(
     `🟢 *Flight Monitor Started*\n` +
