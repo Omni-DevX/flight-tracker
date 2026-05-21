@@ -1,5 +1,5 @@
 import { config } from './config';
-import { FlightWatch, FlightResult, DatePairRecord } from './types';
+import { FlightWatch, FlightResult, DatePairRecord, PriceDropAlert } from './types';
 
 // ──────────────────────────────────────────────
 // Telegram Notification Service
@@ -100,6 +100,31 @@ export async function notifyCoverageComplete(
     `\n\n🔗 [Search on Google Flights](https://www.google.com/travel/flights?q=flights+from+${watch.origin}+to+${watch.destination})`;
 
   await sendMessage(message);
+}
+
+export async function notifyRelativeDrop(
+  watch: FlightWatch,
+  alerts: PriceDropAlert[],
+): Promise<void> {
+  const lines = alerts.slice(0, 5).map((a, i) => {
+    const stops = a.result.stops === 0 ? 'direct' : `${a.result.stops} stop(s)`;
+    const level = a.result.priceLevel ? ` ${priceLevelEmoji(a.result.priceLevel)}` : '';
+    return (
+      `${i + 1}. 🗓 ${a.result.out} → ${a.result.back}\n` +
+      `   💰 *$${a.result.price}* ${a.result.currency} _(was $${a.previousPrice}, −${a.dropPercent}%)_${level}\n` +
+      `   ✈️ ${a.result.airline} · ${stops} · ${a.result.duration}`
+    );
+  });
+
+  const message =
+    `📉 *Price Just Dropped!*\n\n` +
+    `*${watch.origin} → ${watch.destination}*\n` +
+    `${alerts.length} date pair(s) fell ≥8% since last check:\n\n` +
+    lines.join('\n\n') +
+    `\n\n🔗 [Search on Google Flights](https://www.google.com/travel/flights?q=flights+from+${watch.origin}+to+${watch.destination})`;
+
+  await sendMessage(message);
+  console.log(`[Telegram] Relative drop alert sent for ${watch.origin}→${watch.destination}`);
 }
 
 export async function notifyStatusUpdate(

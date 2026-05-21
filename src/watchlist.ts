@@ -122,4 +122,46 @@ export const watchlist: FlightWatch[] = [
     passengers: 1,
     active: true,
   },
+
+  // ═══════════════════════════════════════
+  //  HAMILTON (YHM) — ~45min from Toronto
+  //  Smaller airport, different carriers,
+  //  may route via US hubs for cheaper fares
+  // ═══════════════════════════════════════
+
+  {
+    id: 'yhm-nrt-october',
+    origin: 'YHM',
+    destination: 'NRT',
+    departureDateRange: { from: '2026-10-01', to: '2026-10-31' },
+    tripDuration: { minDays: 10, maxDays: 14 },
+    targetPrice: 950,
+    currency: 'CAD',
+    passengers: 1,
+    active: true,
+  },
+
+  {
+    id: 'yhm-hnd-october',
+    origin: 'YHM',
+    destination: 'HND',
+    departureDateRange: { from: '2026-10-01', to: '2026-10-31' },
+    tripDuration: { minDays: 10, maxDays: 14 },
+    targetPrice: 950,
+    currency: 'CAD',
+    passengers: 1,
+    active: true,
+  },
+
+  {
+    id: 'yhm-kix-october',
+    origin: 'YHM',
+    destination: 'KIX',
+    departureDateRange: { from: '2026-10-01', to: '2026-10-31' },
+    tripDuration: { minDays: 10, maxDays: 14 },
+    targetPrice: 900,
+    currency: 'CAD',
+    passengers: 1,
+    active: true,
+  },
 ];

@@ -1,12 +1,14 @@
 import { eachDayOfInterval, addDays, format, isBefore, startOfDay } from 'date-fns';
 import { config } from './config';
 import { searchFlights, rateLimitDelay } from './flights';
-import { notifyPriceDrop, notifyNewLow, notifyCoverageComplete, notifyStatusUpdate } from './telegram';
+import { notifyPriceDrop, notifyNewLow, notifyCoverageComplete, notifyStatusUpdate, notifyRelativeDrop } from './telegram';
 import {
   loadState, saveState, getWatchState,
   pickNextBatch, recordResult, getCoverageStats, getCheapestPairs, pairKey,
 } from './state';
-import { FlightWatch, DatePair, FlightResult } from './types';
+import { FlightWatch, DatePair, FlightResult, PriceDropAlert } from './types';
+
+const DROP_THRESHOLD_PCT = 0.08; // alert when price drops ≥8% since last check
 
 // ──────────────────────────────────────────────
 // Flight Monitor Core
@@ -75,10 +77,13 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
   }
 
   const results: FlightResult[] = [];
+  const dropAlerts: PriceDropAlert[] = [];
 
   for (const pair of batch) {
-    const isNew = !ws.datePairRecords[pairKey(pair)] || ws.datePairRecords[pairKey(pair)].checkCount === 0;
+    const existingRecord = ws.datePairRecords[pairKey(pair)];
+    const isNew = !existingRecord || existingRecord.checkCount === 0;
     const tag = isNew ? '🆕' : '🔄';
+    const prevPrice = existingRecord?.lastPrice ?? null;
 
     try {
       const flights = await searchFlights(
@@ -94,12 +99,21 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
         const cheapest = flights.reduce((min, f) => (f.price < min.price ? f : min));
         results.push(cheapest);
 
+        // Detect significant price drop since last check
+        if (prevPrice !== null && cheapest.price < prevPrice * (1 - DROP_THRESHOLD_PCT)) {
+          const dropPercent = Math.round((1 - cheapest.price / prevPrice) * 100);
+          dropAlerts.push({ result: cheapest, previousPrice: prevPrice, dropPercent });
+        }
+
         // Record in state
         recordResult(ws, pair, cheapest.price, cheapest.airline, cheapest.priceLevel);
 
+        const dropTag = prevPrice !== null && cheapest.price < prevPrice * (1 - DROP_THRESHOLD_PCT)
+          ? ` ↓${Math.round((1 - cheapest.price / prevPrice) * 100)}%`
+          : '';
         const levelTag = cheapest.priceLevel ? ` [${cheapest.priceLevel}]` : '';
         console.log(
-          `  ${tag} ${pair.out}→${pair.back}: $${cheapest.price} (${cheapest.airline}, ${cheapest.duration})${levelTag}`
+          `  ${tag} ${pair.out}→${pair.back}: $${cheapest.price} (${cheapest.airline}, ${cheapest.duration})${levelTag}${dropTag}`
         );
       } else {
         recordResult(ws, pair, null, null, null);
@@ -136,7 +150,17 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
     }
   }
 
-  // Notify price drops
+  // Notify significant relative price drops (independent of target)
+  if (dropAlerts.length > 0) {
+    try {
+      await notifyRelativeDrop(watch, dropAlerts);
+      console.log(`[Monitor] 📉 ${dropAlerts.length} price drop(s) detected! Alert sent.`);
+    } catch (err) {
+      console.error(`[Telegram] notifyRelativeDrop failed:`, (err as Error).message);
+    }
+  }
+
+  // Notify price drops under absolute target
   if (hits.length > 0) {
     try {
       await notifyPriceDrop(watch, hits);
@@ -144,7 +168,7 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
     } catch (err) {
       console.error(`[Telegram] notifyPriceDrop failed:`, (err as Error).message);
     }
-  } else {
+  } else if (dropAlerts.length === 0) {
     const cheapestPrice = overallCheapest ? `$${overallCheapest.price}` : 'N/A';
     console.log(`[Monitor] No flights under $${watch.targetPrice} in this batch. Cheapest: ${cheapestPrice}`);
     try {

@@ -66,6 +66,12 @@ export interface BatchState {
   [watchId: string]: WatchState;
 }
 
+export interface PriceDropAlert {
+  result: FlightResult;
+  previousPrice: number;
+  dropPercent: number;
+}
+
 // ── SerpAPI response shapes ──
 
 export interface SerpApiFlightResult {
