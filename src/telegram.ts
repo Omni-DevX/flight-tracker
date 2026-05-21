@@ -20,7 +20,7 @@ export async function sendMessage(text: string): Promise<void> {
 
   if (!response.ok) {
     const err = await response.text();
-    console.error('[Telegram] Failed to send message:', err);
+    throw new Error(`[Telegram] Failed to send message: ${err}`);
   }
 }
 
@@ -98,6 +98,26 @@ export async function notifyCoverageComplete(
     lines.join('\n\n') +
     `\n\n_The monitor will keep re-checking these dates for further drops._` +
     `\n\n🔗 [Search on Google Flights](https://www.google.com/travel/flights?q=flights+from+${watch.origin}+to+${watch.destination})`;
+
+  await sendMessage(message);
+}
+
+export async function notifyStatusUpdate(
+  watch: FlightWatch,
+  cheapestPrice: number | null,
+  cheapestResult: FlightResult | null,
+): Promise<void> {
+  const priceText = cheapestPrice !== null && cheapestResult
+    ? `*$${cheapestPrice}* ${watch.currency} (${cheapestResult.airline}, ${cheapestResult.out}→${cheapestResult.back})`
+    : 'No results';
+
+  const level = cheapestResult?.priceLevel ? `\nGoogle says: ${priceLevelEmoji(cheapestResult.priceLevel)}` : '';
+
+  const message =
+    `📋 *Check Complete — No Deal Yet*\n\n` +
+    `*${watch.origin} → ${watch.destination}*\n` +
+    `Target: under $${watch.targetPrice} ${watch.currency}\n` +
+    `Cheapest found: ${priceText}${level}`;
 
   await sendMessage(message);
 }

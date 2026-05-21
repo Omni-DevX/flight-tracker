@@ -1,7 +1,7 @@
 import { eachDayOfInterval, addDays, format, isBefore, startOfDay } from 'date-fns';
 import { config } from './config';
 import { searchFlights, rateLimitDelay } from './flights';
-import { notifyPriceDrop, notifyNewLow, notifyCoverageComplete } from './telegram';
+import { notifyPriceDrop, notifyNewLow, notifyCoverageComplete, notifyStatusUpdate } from './telegram';
 import {
   loadState, saveState, getWatchState,
   pickNextBatch, recordResult, getCoverageStats, getCheapestPairs, pairKey,
@@ -128,17 +128,31 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
       ws.lowestEverPrice = overallCheapest.price;
       ws.lowestEverDates = { out: overallCheapest.out, back: overallCheapest.back };
 
-      await notifyNewLow(watch, overallCheapest, previousLow);
+      try {
+        await notifyNewLow(watch, overallCheapest, previousLow);
+      } catch (err) {
+        console.error(`[Telegram] notifyNewLow failed:`, (err as Error).message);
+      }
     }
   }
 
   // Notify price drops
   if (hits.length > 0) {
-    await notifyPriceDrop(watch, hits);
-    console.log(`[Monitor] 🔔 ${hits.length} flight(s) under target! Alert sent.`);
+    try {
+      await notifyPriceDrop(watch, hits);
+      console.log(`[Monitor] 🔔 ${hits.length} flight(s) under target! Alert sent.`);
+    } catch (err) {
+      console.error(`[Telegram] notifyPriceDrop failed:`, (err as Error).message);
+    }
   } else {
     const cheapestPrice = overallCheapest ? `$${overallCheapest.price}` : 'N/A';
     console.log(`[Monitor] No flights under $${watch.targetPrice} in this batch. Cheapest: ${cheapestPrice}`);
+    try {
+      await notifyStatusUpdate(watch, overallCheapest?.price ?? null, overallCheapest);
+      console.log(`[Telegram] Status update sent.`);
+    } catch (err) {
+      console.error(`[Telegram] notifyStatusUpdate failed:`, (err as Error).message);
+    }
   }
 
   // Check if we just completed full coverage
@@ -146,8 +160,12 @@ export async function checkWatch(watch: FlightWatch): Promise<void> {
   if (newStats.percentComplete === 100 && !ws.coverageComplete) {
     ws.coverageComplete = true;
     const topCheap = getCheapestPairs(ws, 5);
-    await notifyCoverageComplete(watch, topCheap);
-    console.log(`[Monitor] ✅ Full month coverage complete! Sent summary.`);
+    try {
+      await notifyCoverageComplete(watch, topCheap);
+      console.log(`[Monitor] ✅ Full month coverage complete! Sent summary.`);
+    } catch (err) {
+      console.error(`[Telegram] notifyCoverageComplete failed:`, (err as Error).message);
+    }
   }
 
   ws.lastRunAt = new Date().toISOString();

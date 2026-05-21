@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --use-system-ca -e \"fetch\\('https://api.telegram.org'\\).then\\(r => console.log\\('OK', r.status\\)\\).catch\\(e => console.log\\('FAIL', e.message\\)\\)\")"
+    ]
+  }
+}
